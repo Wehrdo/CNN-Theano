@@ -8,64 +8,73 @@ import pickle
 MARGIN = 1
 
 class MLP:
-    def __init__(self, n_d, n_h, n_c):
+    def __init__(self, layer_sizes):
         self.weights = []
         self.biases = []
-        w1 = np.random.standard_normal((n_h, n_d)) * math.sqrt(2/n_d)
-        b1 = np.random.standard_normal((n_h, 1)) * math.sqrt(2/n_d)
-        self.weights.append(w1)
-        self.biases.append(b1)
-
-        w2 = np.random.standard_normal((n_c, n_h)) * math.sqrt(2/n_h)
-        b2 = np.random.standard_normal((n_c, 1)) * math.sqrt(2/n_h)
-        self.weights.append(w2)
-        self.biases.append(b2)
+        for i in range(1, len(layer_sizes)):
+            w = np.random.standard_normal((layer_sizes[i], layer_sizes[i-1])) * math.sqrt(2 / layer_sizes[i-1])
+            b = np.random.standard_normal((layer_sizes[i], 1)) * math.sqrt(2 / layer_sizes[i-1])
+            self.weights.append(w)
+            self.biases.append(b)
 
     def compute(self, x):
-        a1 = self.activation_func(self.biases[0] + np.dot(self.weights[0], x))
-        a2 = self.activation_func(self.biases[1] + np.dot(self.weights[1], a1))
-        return a2
+        activation = x
+        for w, b in zip(self.weights, self.biases):
+            activation = self.activation_func(b + np.dot(w, activation))
+        return activation
 
     def train(self, x, y):
         losses = []
         batch_size = 10
-        for epoch in range(2):
+        for epoch in range(7):
             n_iters = int(x.shape[1] / batch_size)
             for iter in range(n_iters):
                 selection = np.random.randint(0, x.shape[1], batch_size)
-                loss = self.update_weights(x[:,selection], y[:,selection], 0.01 / (epoch + 1))
+                loss = self.update_weights(x[:,selection], y[:,selection], 0.01 / (epoch + 1) + 0.001)
                 losses.append(loss)
         return losses
 
     def update_weights(self, x, y, rate):
         N = x.shape[1]
 
-        p1 = np.dot(self.weights[0], x)
-        z1 = p1 + self.biases[0]
-        a1 = self.activation_func(z1)
+        forward_ps = []
+        forward_zs = []
+        forward_as = []
 
-        p2 = np.dot(self.weights[1], a1)
-        z2 = p2 + self.biases[1]
-        a2 = self.activation_func(z2)
+        a = x
+        forward_as.append(x)
+        for w, b in zip(self.weights, self.biases):
+            p = np.dot(w, a)
+            z = p + b
+            a = self.activation_func(z)
+            forward_ps.append(p)
+            forward_zs.append(z)
+            forward_as.append(a)
 
-        loss = self.compute_loss(y, a2)
-        d_loss = self.loss_gradient(y, a2)
+        a_o = forward_as.pop()
+        loss = self.compute_loss(y, a_o)
+        d_loss = self.loss_gradient(y, a_o)
 
-        d_z2 = d_loss * self.activation_gradient(z2)
-        d_b2 = np.sum(d_z2, axis=1) / N # * 1
-        d_p2 = d_z2 # * 1
-        d_w2 = np.dot(d_p2, a1.T)
-        d_a1 = np.dot(self.weights[1].T, d_p2)
+        d_bs = []
+        d_ws = []
+        d_a = d_loss
+        for p, z, a, w in zip(*map(reversed, [forward_ps, forward_zs, forward_as, self.weights])):
+            d_z = d_a * self.activation_gradient(z)
+            d_b = np.sum(d_z, axis=1) / N
+            d_p = d_z
+            d_w = np.dot(d_p, a.T)
+            d_a = np.dot(w.T, d_p)
+            d_bs.append(d_b)
+            d_ws.append(d_w)
 
-        d_z1 = d_a1 * self.activation_gradient(z1)
-        d_b1 = np.sum(d_z1, axis=1) / N
-        d_p1 = d_z1
-        d_w1 = np.dot(d_p1, x.T)
 
-        self.weights[0] -= rate * d_w1
-        self.weights[1] -= rate * d_w2
-        self.biases[0] -= rate * d_b1.reshape(-1,1)
-        self.biases[1] -= rate * d_b2.reshape(-1,1)
+        # Make in order of layer 0, layer 1, ...
+        d_ws.reverse()
+        d_bs.reverse()
+        for w, d_w, b, d_b in zip(self.weights, d_ws, self.biases, d_bs):
+            w -= rate * d_w
+            b -= rate * d_b.reshape(-1,1)
+
         return loss
 
     def compute_loss(self, expected, actual):
@@ -147,8 +156,9 @@ if __name__ == '__main__':
     # n_classes = len(np.unique(train_labels))
     train_y = transform_labels(train_labels, 10)
 
-    n_hidden = 100
-    mlp = MLP(train_x.shape[0], n_hidden, 10)
+    n_hidden = 50
+    layer_sizes = [train_x.shape[0], n_hidden,  10]
+    mlp = MLP(layer_sizes)
 
     losses = mlp.train(train_x, train_y)
 
