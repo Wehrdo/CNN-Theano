@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec
 import math
+import time
 import pickle
 
 MARGIN = 1
@@ -107,7 +108,7 @@ class MLP:
         return self.relu_gradient(x)
 
     def relu_gradient(self, x):
-        N = x.shape[1]
+        # N = x.shape[1]
         # return np.sum(x > 0, axis=1).astype(float) / N
         return (x > 0).astype(float)
 
@@ -156,25 +157,27 @@ if __name__ == '__main__':
     # n_classes = len(np.unique(train_labels))
     train_y = transform_labels(train_labels, 10)
 
-    n_hidden = 50
+    n_hidden = 100
     layer_sizes = [train_x.shape[0], n_hidden,  10]
     mlp = MLP(layer_sizes)
 
+    start_time = time.time()
     losses = mlp.train(train_x, train_y)
+    print("Took " + str(time.time() - start_time) + " seconds to train")
+    # 50 seconds to train 100 hidden nodes with 7 epochs and batch size 10
 
-
-    n_rows = 10
-    n_cols = int(n_hidden / n_rows)
-    gspec = matplotlib.gridspec.GridSpec(n_rows, n_cols)
-    gspec.update(wspace=0.05, hspace=0.05)
-    # f, ax = plt.subplots(n_rows, n_cols, sharex=True, sharey=True)
-    for row in range(n_rows):
-        for col in range(n_cols):
-            weight_idx = row*n_cols + col
-            ax = plt.subplot(gspec[weight_idx])
-            ax.imshow(mlp.weights[0][weight_idx,:].reshape((28,28)), cmap='gray')
-            ax.axis('off')
-    plt.show()
+    # n_rows = 10
+    # n_cols = int(n_hidden / n_rows)
+    # gspec = matplotlib.gridspec.GridSpec(n_rows, n_cols)
+    # gspec.update(wspace=0.05, hspace=0.05)
+    # # f, ax = plt.subplots(n_rows, n_cols, sharex=True, sharey=True)
+    # for row in range(n_rows):
+    #     for col in range(n_cols):
+    #         weight_idx = row*n_cols + col
+    #         ax = plt.subplot(gspec[weight_idx])
+    #         ax.imshow(mlp.weights[0][weight_idx,:].reshape((28,28)), cmap='gray')
+    #         ax.axis('off')
+    # plt.show()
 
 
     train_results = mlp.compute(train_x)
