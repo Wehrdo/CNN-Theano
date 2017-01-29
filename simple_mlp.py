@@ -1,5 +1,7 @@
 import matplotlib
 import numpy as np
+import theano.tensor as T
+from theano import function as Tfunc
 import matplotlib.pyplot as plt
 import matplotlib.gridspec
 import math
@@ -26,13 +28,15 @@ class MLP:
 
     def train(self, x, y):
         losses = []
-        batch_size = 10
-        for epoch in range(7):
+        batch_size = 200
+        rate = 0.2
+        for epoch in range(12):
             n_iters = int(x.shape[1] / batch_size)
             for iter in range(n_iters):
                 selection = np.random.randint(0, x.shape[1], batch_size)
-                loss = self.update_weights(x[:,selection], y[:,selection], 0.01 / (epoch + 1) + 0.001)
+                loss = self.update_weights(x[:,selection], y[:,selection], rate)
                 losses.append(loss)
+            rate *= 0.95
         return losses
 
     def update_weights(self, x, y, rate):
@@ -63,7 +67,7 @@ class MLP:
             d_z = d_a * self.activation_gradient(z)
             d_b = np.sum(d_z, axis=1) / N
             d_p = d_z
-            d_w = np.dot(d_p, a.T)
+            d_w = np.dot(d_p, a.T) / N
             d_a = np.dot(w.T, d_p)
             d_bs.append(d_b)
             d_ws.append(d_w)
