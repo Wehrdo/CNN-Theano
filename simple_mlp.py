@@ -1,7 +1,9 @@
 import matplotlib
 import numpy as np
+import theano
 import theano.tensor as T
 from theano import function as Tfunc
+from theano import shared, typed_list
 import matplotlib.pyplot as plt
 import matplotlib.gridspec
 import math
@@ -11,30 +13,71 @@ import pickle
 MARGIN = 1
 
 class MLP:
-    def __init__(self, layer_sizes):
-        self.weights = []
-        self.biases = []
-        for i in range(1, len(layer_sizes)):
-            w = np.random.standard_normal((layer_sizes[i], layer_sizes[i-1])) * math.sqrt(2 / layer_sizes[i-1])
-            b = np.random.standard_normal((layer_sizes[i], 1)) * math.sqrt(2 / layer_sizes[i-1])
-            self.weights.append(w)
-            self.biases.append(b)
+    def __init__(self, layer_sizes, trained_model=None):
+        n_layers = len(layer_sizes) - 1
 
-    def compute(self, x):
-        activation = x
-        for w, b in zip(self.weights, self.biases):
-            activation = self.activation_func(b + np.dot(w, activation))
-        return activation
+        if trained_model is None:
+            self.weights = []
+            self.biases = []
+            for i in range(1, n_layers + 1):
+                w = np.random.standard_normal((layer_sizes[i], layer_sizes[i-1])) * math.sqrt(2 / layer_sizes[i-1])
+                b = np.random.standard_normal((layer_sizes[i], 1)) * math.sqrt(2 / layer_sizes[i-1])
+                self.weights.append(w)
+                self.biases.append(b)
+        else:
+            self.weights = trained_model[0]
+            self.biases = trained_model[1]
+
+        self.weights = [shared(w, f"w{i}") for i, w in enumerate(self.weights)]
+        self.biases = [shared(b, f"b{i}", broadcastable=(False,True)) for i, b in enumerate(self.biases)]
+
+        activations = T.dmatrices(n_layers + 1)
+        # activations = [shared(a, f'a{i}') for i, a in enumerate(activations)]
+        for l_i in range(n_layers):
+            activations[l_i+1] = T.nnet.relu(self.biases[l_i] + T.dot(self.weights[l_i], activations[l_i]))
+
+        y = T.dmatrix('y')
+        correct_classes = T.argmax(y, axis=0, keepdims=True)
+        correct_vals = activations[-1][correct_classes, T.arange(y.shape[1])]
+        margin_mat = T.maximum(0, activations[-1] - T.repeat(correct_vals, repeats=y.shape[0], axis=0) + 1)
+        individual_losses = T.sum(margin_mat, axis=0) - margin_mat[correct_classes, T.arange(y.shape[1])]
+        tot_loss = T.sum(individual_losses)
+        loss = tot_loss / y.shape[1]
+
+        self.compute = Tfunc([activations[0]], activations[-1])
+
+        derivatives = T.grad(loss, self.weights + self.biases)
+        rate = T.dscalar('r')
+
+        the_updates = [(var, var - rate*d_var) for var, d_var in zip(self.weights + self.biases, derivatives)]
+        self.update_step = Tfunc([activations[0], y, rate], loss, updates=the_updates)
+        # weights = typed_list.TypedListType(T.dmatrix)()
+        # biases = typed_list.TypedListType(T.dcol)()
+        # activations, updates = theano.scan(lambda i, a, weights_l, biases_l: T.nnet.relu(biases_l[i] + T.dot(weights_l[i], a)),
+        #                                    sequences=[T.arange(len(layer_sizes)-1)],
+        #                                    non_sequences=[weights, biases],
+        #                                    outputs_info=[x],
+        #                                    strict=True)
+        # prediction = activations[-1]
+        # self.forward_pass = Tfunc(inputs=[x, weights, biases], outputs=[prediction], updates=updates)
+
+    # def compute(self, x):
+    #     return self.forward_pass(x, [w.get_value(borrow=True) for w in self.weights], [b.get_value(borrow=True) for b in self.biases])
+        # activation = x
+        # for w, b in zip(self.weights, self.biases):
+        #     activation = self.activation_func(b + np.dot(w, activation))
+        # return activation
 
     def train(self, x, y):
         losses = []
         batch_size = 200
-        rate = 0.2
-        for epoch in range(12):
+        rate = 0.3
+        for epoch in range(30):
             n_iters = int(x.shape[1] / batch_size)
             for iter in range(n_iters):
                 selection = np.random.randint(0, x.shape[1], batch_size)
-                loss = self.update_weights(x[:,selection], y[:,selection], rate)
+                # loss = self.update_weights(x[:,selection], y[:,selection], rate)
+                loss = self.update_step(x[:,selection], y[:,selection], rate)
                 losses.append(loss)
             rate *= 0.95
         return losses
@@ -161,6 +204,9 @@ if __name__ == '__main__':
     # n_classes = len(np.unique(train_labels))
     train_y = transform_labels(train_labels, 10)
 
+    # with open('trained_model.pkl', 'rb') as file:
+    #     pre_trained = pickle.load(file)
+
     n_hidden = 100
     layer_sizes = [train_x.shape[0], n_hidden,  10]
     mlp = MLP(layer_sizes)
@@ -169,6 +215,10 @@ if __name__ == '__main__':
     losses = mlp.train(train_x, train_y)
     print("Took " + str(time.time() - start_time) + " seconds to train")
     # 50 seconds to train 100 hidden nodes with 7 epochs and batch size 10
+
+
+    # with open('trained_model.pkl', 'wb') as file:
+    #     pre_trained = pickle.dump((mlp.weights, mlp.biases), file)
 
     # n_rows = 10
     # n_cols = int(n_hidden / n_rows)
@@ -179,7 +229,7 @@ if __name__ == '__main__':
     #     for col in range(n_cols):
     #         weight_idx = row*n_cols + col
     #         ax = plt.subplot(gspec[weight_idx])
-    #         ax.imshow(mlp.weights[0][weight_idx,:].reshape((28,28)), cmap='gray')
+    #         ax.imshow(mlp.weights[0].get_value(borrow=True)[weight_idx,:].reshape((28,28)), cmap='gray')
     #         ax.axis('off')
     # plt.show()
 
