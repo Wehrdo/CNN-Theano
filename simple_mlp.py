@@ -19,6 +19,7 @@ class MLP:
         if trained_model is None:
             self.weights = []
             self.biases = []
+            # Initialize random values for weight and biase matrices
             for i in range(1, n_layers + 1):
                 w = np.random.standard_normal((layer_sizes[i], layer_sizes[i-1])) * math.sqrt(2 / layer_sizes[i-1])
                 b = np.random.standard_normal((layer_sizes[i], 1)) * math.sqrt(2 / layer_sizes[i-1])
@@ -28,45 +29,44 @@ class MLP:
             self.weights = trained_model[0]
             self.biases = trained_model[1]
 
+        #### Theano definitions ####
+
+        # Turn weights and biases into shared variables to be used in training and predicting
         self.weights = [shared(w, f"w{i}") for i, w in enumerate(self.weights)]
         self.biases = [shared(b, f"b{i}", broadcastable=(False,True)) for i, b in enumerate(self.biases)]
 
+        # List of matrices for each layer's activations, plus one for input
         activations = T.dmatrices(n_layers + 1)
-        # activations = [shared(a, f'a{i}') for i, a in enumerate(activations)]
         for l_i in range(n_layers):
+            # Define layer function: max(0, w*x + b)
             activations[l_i+1] = T.nnet.relu(self.biases[l_i] + T.dot(self.weights[l_i], activations[l_i]))
 
+        ## Hinge loss
+        # Variable for y value (correct values when training)
         y = T.dmatrix('y')
+        # Indices of the correct classes
         correct_classes = T.argmax(y, axis=0, keepdims=True)
+        # Actual values predicted for the correct classes
         correct_vals = activations[-1][correct_classes, T.arange(y.shape[1])]
+        # margin: max(0, predicted - correct_value + 1)
         margin_mat = T.maximum(0, activations[-1] - T.repeat(correct_vals, repeats=y.shape[0], axis=0) + 1)
+        # Loss for each training sample
         individual_losses = T.sum(margin_mat, axis=0) - margin_mat[correct_classes, T.arange(y.shape[1])]
         tot_loss = T.sum(individual_losses)
+        # Average loss
         loss = tot_loss / y.shape[1]
 
-        self.compute = Tfunc([activations[0]], activations[-1])
+        # Create Theano function for predicting
+        self.predict = Tfunc([activations[0]], activations[-1])
 
+        # List of expressions for derivatives: d_w1, d_w2, ... d_b1, d_b2,...
         derivatives = T.grad(loss, self.weights + self.biases)
+        # Learning rate
         rate = T.dscalar('r')
-
+        # How to update weights and biases when training
         the_updates = [(var, var - rate*d_var) for var, d_var in zip(self.weights + self.biases, derivatives)]
+        # Function for actually executing training
         self.update_step = Tfunc([activations[0], y, rate], loss, updates=the_updates)
-        # weights = typed_list.TypedListType(T.dmatrix)()
-        # biases = typed_list.TypedListType(T.dcol)()
-        # activations, updates = theano.scan(lambda i, a, weights_l, biases_l: T.nnet.relu(biases_l[i] + T.dot(weights_l[i], a)),
-        #                                    sequences=[T.arange(len(layer_sizes)-1)],
-        #                                    non_sequences=[weights, biases],
-        #                                    outputs_info=[x],
-        #                                    strict=True)
-        # prediction = activations[-1]
-        # self.forward_pass = Tfunc(inputs=[x, weights, biases], outputs=[prediction], updates=updates)
-
-    # def compute(self, x):
-    #     return self.forward_pass(x, [w.get_value(borrow=True) for w in self.weights], [b.get_value(borrow=True) for b in self.biases])
-        # activation = x
-        # for w, b in zip(self.weights, self.biases):
-        #     activation = self.activation_func(b + np.dot(w, activation))
-        # return activation
 
     def train(self, x, y):
         losses = []
@@ -155,8 +155,6 @@ class MLP:
         return self.relu_gradient(x)
 
     def relu_gradient(self, x):
-        # N = x.shape[1]
-        # return np.sum(x > 0, axis=1).astype(float) / N
         return (x > 0).astype(float)
 
     def tanh_gradient(self, x):
@@ -220,21 +218,22 @@ if __name__ == '__main__':
     # with open('trained_model.pkl', 'wb') as file:
     #     pre_trained = pickle.dump((mlp.weights, mlp.biases), file)
 
-    # n_rows = 10
-    # n_cols = int(n_hidden / n_rows)
-    # gspec = matplotlib.gridspec.GridSpec(n_rows, n_cols)
-    # gspec.update(wspace=0.05, hspace=0.05)
-    # # f, ax = plt.subplots(n_rows, n_cols, sharex=True, sharey=True)
-    # for row in range(n_rows):
-    #     for col in range(n_cols):
-    #         weight_idx = row*n_cols + col
-    #         ax = plt.subplot(gspec[weight_idx])
-    #         ax.imshow(mlp.weights[0].get_value(borrow=True)[weight_idx,:].reshape((28,28)), cmap='gray')
-    #         ax.axis('off')
-    # plt.show()
+    # Show first layer weights
+    n_rows = 10
+    n_cols = int(n_hidden / n_rows)
+    gspec = matplotlib.gridspec.GridSpec(n_rows, n_cols)
+    gspec.update(wspace=0.05, hspace=0.05)
+    # f, ax = plt.subplots(n_rows, n_cols, sharex=True, sharey=True)
+    for row in range(n_rows):
+        for col in range(n_cols):
+            weight_idx = row*n_cols + col
+            ax = plt.subplot(gspec[weight_idx])
+            ax.imshow(mlp.weights[0].get_value(borrow=True)[weight_idx,:].reshape((28,28)), cmap='gray')
+            ax.axis('off')
+    plt.show()
 
 
-    train_results = mlp.compute(train_x)
+    train_results = mlp.predict(train_x)
     predictions = np.argmax(train_results, axis=0)
 
     accuracy = np.sum(np.argmax(train_y, axis=0) == predictions) / train_y.shape[1]
@@ -244,39 +243,8 @@ if __name__ == '__main__':
     test_data = test_set[0]
     preprocess(test_data, transform)
     test_x = test_data.T
-    test_accuracy = np.sum(np.argmax(test_y, axis=0) == np.argmax(mlp.compute(test_x), axis=0)) / test_y.shape[1]
+    test_accuracy = np.sum(np.argmax(test_y, axis=0) == np.argmax(mlp.predict(test_x), axis=0)) / test_y.shape[1]
     print("Test accuracy: " + str(test_accuracy))
     
     plt.plot(losses)
     plt.show()
-
-    # train_data = []
-    # train_size = 100
-    # for i in range(train_size):
-    #     x, y = np.random.randint(0, 2, 2)
-    #     xor = x ^ y
-    #     train_data.append((np.array([x,y]).reshape((2,1)), (np.array([xor]))))
-    # # for x_raw in range(2):
-    # #     for y_raw in range(2):
-    # #         xor = x_raw ^ y_raw
-    # #         x, y = (x_raw * 2 - 1, y_raw * 2 - 1)
-    # #         xor = xor * 2 - 1
-    # #         train_data.append((np.array([x, y]).reshape((2, 1)), (np.array([xor]))))
-    #
-    #
-    # normalization = preprocess(train_data)
-    #
-    # mlp.train(train_data)
-    #
-    # for sample in [(0 ,0), (0, 1), (1, 0), (1, 1)]:
-    #     output = mlp.compute(np.array(sample).reshape((2,1)))
-    #     print(sample, output)
-    #
-    # zs = []
-    # steps = 100
-    # for x in np.linspace(-0.5, 1.5, steps):
-    #     for y in reversed(np.linspace(-0.5, 1.5, steps)):
-    #         zs.append(mlp.compute(np.array([x,y]).reshape((2,1))))
-    # values = np.array(zs).reshape((steps, steps))
-    # plt.imshow(values, extent=(-0.5, 1.5, -0.5, 1.5), interpolation='nearest', cmap=cm.gist_heat)
-    # plt.show()
