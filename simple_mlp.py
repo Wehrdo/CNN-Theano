@@ -10,6 +10,7 @@ import matplotlib.colors
 import math
 import time
 import pickle
+import itertools
 
 MARGIN = 1
 
@@ -81,15 +82,39 @@ class MLP:
         # Learning rate
         rate = T.dscalar('r')
         # How to update weights and biases when training
-        the_updates = [(var, var - rate*d_var) for var, d_var in zip(self.weights + self.biases, derivatives)]
+        B1 = 0.9
+        B2 = 0.999
+        eps = 1e-8
+        decayed_B1 = shared(B1, 'B1')
+        decayed_B2 = shared(B2, 'B2')
+        update_rules = []
+        for i, param in enumerate(itertools.chain(self.weights, self.biases)):
+            param_dims = param.get_value(borrow=True).shape
+            moment1 = shared(np.zeros(param_dims), broadcastable=param.broadcastable)
+            moment2 = shared(np.zeros(param_dims), broadcastable=param.broadcastable)
+            # computation
+            gradient = derivatives[i]
+            new_moment1 = (B1 * moment1) + ((1 - B1) * gradient)
+            new_moment2 = (B2 * moment2) + ((1 - B2) * gradient * gradient)
+            moment1_est = new_moment1 / (1 - decayed_B1)
+            moment2_est = new_moment2 / (1 - decayed_B2)
+            param_update = param - rate*(moment1_est / (T.sqrt(moment2_est) + eps))
+            update_rules.append((param, param_update))
+            update_rules.append((moment1, new_moment1))
+            update_rules.append((moment2, new_moment2))
+        update_rules.append((decayed_B1, B1 * decayed_B1))
+        update_rules.append((decayed_B2, B2 * decayed_B2))
+
+
+        # the_updates = [(var, var - rate*d_var) for var, d_var in zip(self.weights + self.biases, derivatives)]
         # Function for actually executing training
-        self.update_step = Tfunc([activations[0], y, rate], loss, updates=the_updates)
+        self.update_step = Tfunc([activations[0], y, rate], loss, updates=update_rules)
 
     def train(self, x, y, test_x, test_y, batch_size=200, epochs=30):
         losses = []
         train_accuracies = []
         test_accuracies = []
-        rate = 0.1
+        rate = 0.001
         for epoch in range(epochs):
             print(f"Epoch {epoch}")
             n_iters = int(x.shape[1] / batch_size)
@@ -98,7 +123,6 @@ class MLP:
                 # loss = self.update_weights(x[:,selection], y[:,selection], rate)
                 loss = self.update_step(x[:,selection], y[:,selection], rate)
                 losses.append(loss)
-            rate *= 0.95
             train_accuracies.append(calc_accuracy(self, x, y))
             test_accuracies.append(calc_accuracy(self, test_x, test_y))
         return losses, train_accuracies, test_accuracies
@@ -219,13 +243,13 @@ def show_predictions(data_x, data_predictions, class_names={}, n_to_show=50):
     data_x_norm = (data_x - data_x.min()) * (1/scale_fac)
     for row in range(n_rows):
         for col in range(n_cols):
+            rand_img = np.random.randint(0, data_x.shape[1])
             img_idx = row*n_cols + col
             ax = plt.subplot(gspec[img_idx])
-            ax.imshow(np.transpose(data_x_norm[:,img_idx].reshape((32,32,3), order='F'), [1,0,2]))
-            ax.set_title(class_names.get(data_predictions[img_idx], str(data_predictions[img_idx])))
+            ax.imshow(np.transpose(data_x_norm[:,rand_img].reshape((32,32,3), order='F'), [1,0,2]))
+            ax.set_title(class_names.get(data_predictions[rand_img], str(data_predictions[rand_img])))
             ax.axis('off')
     plt.show()
-
 
 if __name__ == '__main__':
     # with open('datasets/mnist.pkl3', 'rb') as data_f:
@@ -253,8 +277,8 @@ if __name__ == '__main__':
     n_hidden = 100
     layer_sizes = [train_x.shape[0], n_hidden,  10]
     dropout = 0.5
-    batch = 200
-    epochs = 10
+    batch = 100
+    epochs = 1
 
     if train_scratch:
         mlp = MLP(layer_sizes, dropout)
@@ -297,5 +321,5 @@ if __name__ == '__main__':
     predictions = np.argmax(output, axis=0)
 
     name_map = {0: 'airplane', 1: 'automobile', 2: 'bird', 3: 'cat', 4: 'deer', 5: 'dog', 6: 'frog', 7: 'horse', 8: 'ship', 9: 'truck'}
-    show_predictions(test_x, predictions, name_map, 80)
+    # show_predictions(test_x, predictions, name_map, 80)
 
