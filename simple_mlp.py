@@ -3,7 +3,7 @@ import numpy as np
 import theano.tensor as T
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from theano import function as Tfunc
-from theano import shared, typed_list
+from theano import shared
 import matplotlib.pyplot as plt
 import matplotlib.gridspec
 import matplotlib.colors
@@ -37,6 +37,9 @@ class MLP:
         self.weights = [shared(w, f"w{i}") for i, w in enumerate(self.weights)]
         self.biases = [shared(b, f"b{i}", broadcastable=(False,True)) for i, b in enumerate(self.biases)]
 
+        # Variable for y value (correct values when training)
+        y = T.dmatrix('y')
+
         # List of matrices for each layer's activations, plus one for input
         activations = T.dmatrices(n_layers + 1)
         # Dropout random number matrices
@@ -45,14 +48,14 @@ class MLP:
         np_rng = np.random.RandomState()
         for i in range(1, n_layers):
             srng = RandomStreams(np_rng.randint(1000000))
-            rv = srng.uniform((layer_sizes[i], 1))
+            rv = srng.uniform((layer_sizes[i], y.shape[1]))
             dropout_masks.append(rv)
         for l_i in range(n_layers):
             # Define layer function: max(0, w*x + b)
             if l_i == n_layers - 1: # Output layer
                 activations[l_i + 1] = self.biases[l_i] + T.dot(self.weights[l_i], activations[l_i])
-            elif l_i == 0:
-                activations[l_i + 1] = T.nnet.relu(self.biases[l_i] + T.dot(self.weights[l_i], activations[l_i]))
+            # elif l_i == 0:
+            #     activations[l_i + 1] = T.nnet.relu(self.biases[l_i] + T.dot(self.weights[l_i], activations[l_i]))
             else:
                 pre_mask = T.nnet.relu(self.biases[l_i] + T.dot(self.weights[l_i], activations[l_i]))
                 dropout_mask = (dropout_masks[l_i] < dropout_rate) / dropout_rate
@@ -60,8 +63,6 @@ class MLP:
 
 
         ## Hinge loss
-        # Variable for y value (correct values when training)
-        y = T.dmatrix('y')
         # Indices of the correct classes
         correct_classes = T.argmax(y, axis=0, keepdims=True)
         # Actual values predicted for the correct classes
@@ -74,8 +75,17 @@ class MLP:
         # Average loss
         loss = tot_loss / y.shape[1]
 
+        # List of matrices for each layer's activations, plus one for input
+        pred_activations = T.dmatrices(n_layers + 1)
+        for l_i in range(n_layers):
+            # Define layer function: max(0, w*x + b)
+            if l_i == n_layers - 1: # Output layer
+                pred_activations[l_i + 1] = self.biases[l_i] + T.dot(self.weights[l_i], pred_activations[l_i])
+            else:
+                pred_activations[l_i + 1] = T.nnet.relu(self.biases[l_i] + T.dot(self.weights[l_i], pred_activations[l_i]))
+
         # Create Theano function for predicting
-        self.predict = Tfunc([activations[0]], activations[-1])
+        self.predict = Tfunc([pred_activations[0]], pred_activations[-1])
 
         # List of expressions for derivatives: d_w1, d_w2, ... d_b1, d_b2,...
         derivatives = T.grad(loss, self.weights + self.biases)
@@ -276,9 +286,9 @@ if __name__ == '__main__':
     train_scratch = True
     n_hidden = 100
     layer_sizes = [train_x.shape[0], n_hidden,  10]
-    dropout = 0.5
-    batch = 100
-    epochs = 1
+    dropout = 0.4
+    batch = 200
+    epochs = 10
 
     if train_scratch:
         mlp = MLP(layer_sizes, dropout)
