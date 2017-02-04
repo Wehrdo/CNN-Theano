@@ -1,11 +1,12 @@
 import matplotlib
 import numpy as np
-import theano
 import theano.tensor as T
+from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from theano import function as Tfunc
 from theano import shared, typed_list
 import matplotlib.pyplot as plt
 import matplotlib.gridspec
+import matplotlib.colors
 import math
 import time
 import pickle
@@ -13,7 +14,7 @@ import pickle
 MARGIN = 1
 
 class MLP:
-    def __init__(self, layer_sizes, trained_model=None):
+    def __init__(self, layer_sizes, dropout_rate, trained_model=None):
         n_layers = len(layer_sizes) - 1
 
         if trained_model is None:
@@ -37,9 +38,25 @@ class MLP:
 
         # List of matrices for each layer's activations, plus one for input
         activations = T.dmatrices(n_layers + 1)
+        # Dropout random number matrices
+        dropout_masks = []
+        np.random.seed(1)
+        np_rng = np.random.RandomState()
+        for i in range(1, n_layers):
+            srng = RandomStreams(np_rng.randint(1000000))
+            rv = srng.uniform((layer_sizes[i], 1))
+            dropout_masks.append(rv)
         for l_i in range(n_layers):
             # Define layer function: max(0, w*x + b)
-            activations[l_i+1] = T.nnet.relu(self.biases[l_i] + T.dot(self.weights[l_i], activations[l_i]))
+            if l_i == n_layers - 1: # Output layer
+                activations[l_i + 1] = self.biases[l_i] + T.dot(self.weights[l_i], activations[l_i])
+            elif l_i == 0:
+                activations[l_i + 1] = T.nnet.relu(self.biases[l_i] + T.dot(self.weights[l_i], activations[l_i]))
+            else:
+                pre_mask = T.nnet.relu(self.biases[l_i] + T.dot(self.weights[l_i], activations[l_i]))
+                dropout_mask = (dropout_masks[l_i] < dropout_rate) / dropout_rate
+                activations[l_i + 1] = pre_mask * dropout_mask
+
 
         ## Hinge loss
         # Variable for y value (correct values when training)
@@ -68,11 +85,13 @@ class MLP:
         # Function for actually executing training
         self.update_step = Tfunc([activations[0], y, rate], loss, updates=the_updates)
 
-    def train(self, x, y):
+    def train(self, x, y, test_x, test_y, batch_size=200, epochs=30):
         losses = []
-        batch_size = 200
-        rate = 0.3
-        for epoch in range(30):
+        train_accuracies = []
+        test_accuracies = []
+        rate = 0.1
+        for epoch in range(epochs):
+            print(f"Epoch {epoch}")
             n_iters = int(x.shape[1] / batch_size)
             for iter in range(n_iters):
                 selection = np.random.randint(0, x.shape[1], batch_size)
@@ -80,7 +99,9 @@ class MLP:
                 loss = self.update_step(x[:,selection], y[:,selection], rate)
                 losses.append(loss)
             rate *= 0.95
-        return losses
+            train_accuracies.append(calc_accuracy(self, x, y))
+            test_accuracies.append(calc_accuracy(self, test_x, test_y))
+        return losses, train_accuracies, test_accuracies
 
     def update_weights(self, x, y, rate):
         N = x.shape[1]
@@ -175,6 +196,12 @@ def preprocess(data, params=None):
         # data /= params[1]
         return params
 
+def calc_accuracy(mlp, data_x, data_y):
+    output = mlp.predict(data_x)
+    predictions = np.argmax(output, axis=0)
+    accuracy = np.sum(np.argmax(data_y, axis=0) == predictions) / data_y.shape[1]
+    return accuracy
+
 def transform_labels(labels, n_classes=None):
     if n_classes is None:
         n_classes = len(np.unique(labels))
@@ -183,14 +210,29 @@ def transform_labels(labels, n_classes=None):
         y[c, np.where(labels == c)[0]] = 1
     return y
 
+def show_predictions(data_x, data_predictions, class_names={}, n_to_show=50):
+    n_rows = 8
+    n_cols = int(n_to_show / n_rows)
+    gspec = matplotlib.gridspec.GridSpec(n_rows, n_cols)
+    # gspec.update(wspace=0.05, hspace=0.05)
+    scale_fac = data_x.max() - data_x.min()
+    data_x_norm = (data_x - data_x.min()) * (1/scale_fac)
+    for row in range(n_rows):
+        for col in range(n_cols):
+            img_idx = row*n_cols + col
+            ax = plt.subplot(gspec[img_idx])
+            ax.imshow(np.transpose(data_x_norm[:,img_idx].reshape((32,32,3), order='F'), [1,0,2]))
+            ax.set_title(class_names.get(data_predictions[img_idx], str(data_predictions[img_idx])))
+            ax.axis('off')
+    plt.show()
+
 
 if __name__ == '__main__':
-    with open('datasets/mnist.pkl3', 'rb') as data_f:
+    # with open('datasets/mnist.pkl3', 'rb') as data_f:
+    with open('datasets/cifar-10-python/combined_data.pkl3', 'rb') as data_f:
         train_set, test_set, validation_set = pickle.load(data_f)
-
     # with gzip.open('datasets/mnist.pkl3.gz', 'wb') as data_f:
     #     pickle.dump((train_set, test_set, validation_set), data_f)
-
 
     amt = 50000
     train_data = train_set[0][0:amt]
@@ -202,49 +244,58 @@ if __name__ == '__main__':
     # n_classes = len(np.unique(train_labels))
     train_y = transform_labels(train_labels, 10)
 
-    # with open('trained_model.pkl', 'rb') as file:
-    #     pre_trained = pickle.load(file)
-
-    n_hidden = 100
-    layer_sizes = [train_x.shape[0], n_hidden,  10]
-    mlp = MLP(layer_sizes)
-
-    start_time = time.time()
-    losses = mlp.train(train_x, train_y)
-    print("Took " + str(time.time() - start_time) + " seconds to train")
-    # 50 seconds to train 100 hidden nodes with 7 epochs and batch size 10
-
-
-    # with open('trained_model.pkl', 'wb') as file:
-    #     pre_trained = pickle.dump((mlp.weights, mlp.biases), file)
-
-    # Show first layer weights
-    n_rows = 10
-    n_cols = int(n_hidden / n_rows)
-    gspec = matplotlib.gridspec.GridSpec(n_rows, n_cols)
-    gspec.update(wspace=0.05, hspace=0.05)
-    # f, ax = plt.subplots(n_rows, n_cols, sharex=True, sharey=True)
-    for row in range(n_rows):
-        for col in range(n_cols):
-            weight_idx = row*n_cols + col
-            ax = plt.subplot(gspec[weight_idx])
-            ax.imshow(mlp.weights[0].get_value(borrow=True)[weight_idx,:].reshape((28,28)), cmap='gray')
-            ax.axis('off')
-    plt.show()
-
-
-    train_results = mlp.predict(train_x)
-    predictions = np.argmax(train_results, axis=0)
-
-    accuracy = np.sum(np.argmax(train_y, axis=0) == predictions) / train_y.shape[1]
-    print("Train accuracy: " + str(accuracy))
-
     test_y = transform_labels(test_set[1], 10)
     test_data = test_set[0]
     preprocess(test_data, transform)
     test_x = test_data.T
-    test_accuracy = np.sum(np.argmax(test_y, axis=0) == np.argmax(mlp.predict(test_x), axis=0)) / test_y.shape[1]
-    print("Test accuracy: " + str(test_accuracy))
-    
-    plt.plot(losses)
-    plt.show()
+    # adam, RMSprop
+    train_scratch = True
+    n_hidden = 100
+    layer_sizes = [train_x.shape[0], n_hidden,  10]
+    dropout = 0.5
+    batch = 200
+    epochs = 10
+
+    if train_scratch:
+        mlp = MLP(layer_sizes, dropout)
+
+        start_time = time.time()
+        losses, train_accuracies, test_accuracies = mlp.train(train_x, train_y, test_x, test_y, batch, epochs)
+        print("Took " + str(time.time() - start_time) + " seconds to train")
+        plt.subplot(2, 1, 1)
+        plt.plot(losses)
+        plt.subplot(2, 1, 2)
+        plt.plot(train_accuracies)
+        plt.plot(test_accuracies)
+        plt.show()
+
+        with open('trained_model_cifar.pkl', 'wb') as file:
+            pickle.dump(([w.get_value() for w in mlp.weights], [b.get_value() for b in mlp.biases]), file)
+    else:
+        with open('trained_model_cifar.pkl', 'rb') as file:
+            pre_trained = pickle.load(file)
+            mlp = MLP(layer_sizes, dropout, pre_trained)
+        print("Train accuracy: " + str(calc_accuracy(mlp, train_x, train_y)))
+        print("Test accuracy: " + str(calc_accuracy(mlp, test_x, test_y)))
+
+
+    # Show first layer weights
+    # n_rows = 10
+    # n_cols = int(n_hidden / n_rows)
+    # gspec = matplotlib.gridspec.GridSpec(n_rows, n_cols)
+    # gspec.update(wspace=0.05, hspace=0.05)
+    # # f, ax = plt.subplots(n_rows, n_cols, sharex=True, sharey=True)
+    # for row in range(n_rows):
+    #     for col in range(n_cols):
+    #         weight_idx = row*n_cols + col
+    #         ax = plt.subplot(gspec[weight_idx])
+    #         ax.imshow(mlp.weights[0].get_value(borrow=True)[weight_idx,:].reshape((32,32,3), order='F'))#((28,28)), cmap='gray')
+    #         ax.axis('off')
+    # plt.show()
+
+    output = mlp.predict(test_x)
+    predictions = np.argmax(output, axis=0)
+
+    name_map = {0: 'airplane', 1: 'automobile', 2: 'bird', 3: 'cat', 4: 'deer', 5: 'dog', 6: 'frog', 7: 'horse', 8: 'ship', 9: 'truck'}
+    show_predictions(test_x, predictions, name_map, 80)
+
