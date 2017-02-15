@@ -120,13 +120,11 @@ class MLP:
         # Function for actually executing training
         self.update_step = Tfunc([activations[0], y, rate], loss, updates=update_rules)
 
-    def train(self, x, y, test_x, test_y, batch_size=200, epochs=30):
+    def train(self, x, y, test_x, test_y, rate=0.002, batch_size=200, epochs=30):
         losses = []
         train_accuracies = []
         test_accuracies = []
-        rate = 0.001
         for epoch in range(epochs):
-            print(f"Epoch {epoch}")
             n_iters = int(x.shape[1] / batch_size)
             for iter in range(n_iters):
                 selection = np.random.randint(0, x.shape[1], batch_size)
@@ -135,6 +133,7 @@ class MLP:
                 losses.append(loss)
             train_accuracies.append(calc_accuracy(self, x, y))
             test_accuracies.append(calc_accuracy(self, test_x, test_y))
+            print(f"Epoch {epoch}, train: {train_accuracies[-1]}, test: {test_accuracies[-1]}")
         return losses, train_accuracies, test_accuracies
 
     def update_weights(self, x, y, rate):
@@ -285,30 +284,39 @@ if __name__ == '__main__':
     # adam, RMSprop
     train_scratch = True
     n_hidden = 100
-    layer_sizes = [train_x.shape[0], n_hidden,  10]
-    dropout = 0.4
+    layer_sizes = [train_x.shape[0], 100,  10]
+    dropout = 0.7
     batch = 200
-    epochs = 10
+    epochs = 15
+    alpha = 0.001
 
     if train_scratch:
         mlp = MLP(layer_sizes, dropout)
 
         start_time = time.time()
-        losses, train_accuracies, test_accuracies = mlp.train(train_x, train_y, test_x, test_y, batch, epochs)
+        losses, train_accuracies, test_accuracies = mlp.train(train_x, train_y, test_x, test_y, alpha, batch, epochs)
         print("Took " + str(time.time() - start_time) + " seconds to train")
         plt.subplot(2, 1, 1)
         plt.plot(losses)
         plt.subplot(2, 1, 2)
-        plt.plot(train_accuracies)
-        plt.plot(test_accuracies)
+        plt.plot(train_accuracies, ls="none", marker='o')
+        plt.plot(test_accuracies, ls="none", marker='o')
         plt.show()
 
         with open('trained_model_cifar.pkl', 'wb') as file:
-            pickle.dump(([w.get_value() for w in mlp.weights], [b.get_value() for b in mlp.biases]), file)
+            mlp_data = ([w.get_value() for w in mlp.weights], [b.get_value() for b in mlp.biases])
+            pickle.dump((mlp_data, train_accuracies, test_accuracies, losses), file)
     else:
         with open('trained_model_cifar.pkl', 'rb') as file:
-            pre_trained = pickle.load(file)
+            pre_trained, train_accuracies, test_accuracies, losses = saved_data = pickle.load(file)
             mlp = MLP(layer_sizes, dropout, pre_trained)
+
+        plt.subplot(2, 1, 1)
+        plt.plot(losses)
+        plt.subplot(2, 1, 2)
+        plt.plot(train_accuracies, ls="none", marker='o')
+        plt.plot(test_accuracies, ls="none", marker='o')
+        plt.show()
         print("Train accuracy: " + str(calc_accuracy(mlp, train_x, train_y)))
         print("Test accuracy: " + str(calc_accuracy(mlp, test_x, test_y)))
 
