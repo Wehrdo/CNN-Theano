@@ -1,0 +1,7 @@
+[global]
+profile = False
+#optimizer=fast_compile
+#exception_verbosity = high
+[blas]
+ldflags = "-LC:/SDK/IntelSWTools/compilers_and_libraries_2017/windows/mkl/lib/intel64_win -lmkl_lapack95_lp64 -lmkl_blas95_lp64 -lmkl_rt -lm -lm"
+[profiling]
