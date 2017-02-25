@@ -30,11 +30,11 @@ class MLP:
                 n_kernels = layer_sizes[i][2]
                 kernel_size = layer_sizes[i-1][0] - layer_sizes[i][0] + 1
                 assert(kernel_size == layer_sizes[i-1][1] - layer_sizes[i][1] + 1) # Check that x/y dims match
-                w_mat_size = (n_kernels, layer_sizes[i-1][2] * kernel_size**2)
+                w_mat_size = (n_kernels, layer_sizes[i-1][2], kernel_size, kernel_size)
                 kernel_sizes.append(kernel_size)
 
                 w = np.random.standard_normal(w_mat_size) * math.sqrt(2 / w_mat_size[1])
-                b = np.random.standard_normal((n_kernels,1,1)) * math.sqrt(2 / w_mat_size[1])
+                b = np.random.standard_normal((1,n_kernels,1,1)) * math.sqrt(2 / w_mat_size[1])
 
                 # w = np.random.standard_normal((layer_sizes[i], layer_sizes[i-1])) * math.sqrt(2 / layer_sizes[i-1])
                 # b = np.random.standard_normal((layer_sizes[i], 1)) * math.sqrt(2 / layer_sizes[i-1])
@@ -48,14 +48,13 @@ class MLP:
 
         # Turn weights and biases into shared variables to be used in training and predicting
         self.weights = [shared(w, f"w{i}") for i, w in enumerate(self.weights)]
-        self.biases = [shared(b, f"b{i}", broadcastable=(False,True,True)) for i, b in enumerate(self.biases)]
+        self.biases = [shared(b, f"b{i}", broadcastable=(True,False,True,True)) for i, b in enumerate(self.biases)]
 
         # Variable for y value (correct values when training)
         y = T.dmatrix('y')
 
         # List of matrices for each layer's activations, plus one for input
-        activations = T.dtensor4s(n_layers)
-        activations.append(T.dtensor3())
+        activations = T.dtensor4s(n_layers + 1)
 
         images = T.tensor4('images')
         activations[0] = images #im2col.im2col(images, kernel_sizes[0])
@@ -70,12 +69,13 @@ class MLP:
         #     dropout_masks.append(rv)
         for l_i in range(n_layers):
             # Define layer function: max(0, w*x + b)
-            columnized = im2col.im2col(activations[l_i], kernel_sizes[l_i])
             if l_i == n_layers - 1: # Output layer
-                activations[l_i + 1] = self.biases[l_i] + T.tensordot(self.weights[l_i], columnized, axes=1)
+                activations[l_i + 1] = T.nnet.conv2d(activations[l_i], self.weights[l_i]) + self.biases[l_i]
+                # activations[l_i + 1] = self.biases[l_i] + T.tensordot(self.weights[l_i], columnized, axes=1)
             else:
-                activation = T.nnet.relu(self.biases[l_i] + T.tensordot(self.weights[l_i], columnized, axes=1))
-                activations[l_i + 1] = im2col.col2im(activation, layer_sizes[l_i + 1])
+                activations[l_i + 1] = T.nnet.relu(T.nnet.conv2d(activations[l_i], self.weights[l_i]) + self.biases[l_i])
+                # activation = T.nnet.relu(self.biases[l_i] + T.tensordot(self.weights[l_i], columnized, axes=1))
+                # activations[l_i + 1] = im2col.col2im(activation, layer_sizes[l_i + 1])
             # elif l_i == 0:
             #     activations[l_i + 1] = T.nnet.relu(self.biases[l_i] + T.dot(self.weights[l_i], activations[l_i]))
             # else:
@@ -99,27 +99,23 @@ class MLP:
         # loss = tot_loss / y.shape[3]
 
         # TODO: Update loss to work with imagized version
-        n_classes = y.shape[0]
-        n_samples = y.shape[1]
-        reshaped_y = y.dimshuffle(1,0)
+        n_classes = y.shape[1]
+        n_samples = y.shape[0]
         # activations[-1] is (C,1,N). Drop the middle dimension, then transpose
-        reshaped_x = activations[-1].reshape((n_classes, n_samples)).dimshuffle(1,0)
-        individual_losses = T.nnet.categorical_crossentropy(T.nnet.softmax(reshaped_x), reshaped_y)
+        reshaped_x = activations[-1].reshape((n_samples, n_classes))
+        individual_losses = T.nnet.categorical_crossentropy(T.nnet.softmax(reshaped_x), y)
         loss = T.sum(individual_losses) / n_samples
 
         # List of matrices for each layer's activations, plus one for input
-        pred_activations = T.tensor4s(n_layers)
-        pred_activations.append(T.tensor3())
+        pred_activations = T.tensor4s(n_layers + 1)
         pred_images = T.tensor4('pred_images')
         pred_activations[0] = pred_images #im2col.im2col(pred_images, kernel_sizes[0])
         for l_i in range(n_layers):
-            columnized = im2col.im2col(pred_activations[l_i], kernel_sizes[l_i])
             # Define layer function: max(0, w*x + b)
             if l_i == n_layers - 1: # Output layer
-                pred_activations[l_i + 1] = self.biases[l_i] + T.tensordot(self.weights[l_i], columnized, axes=1)
+                pred_activations[l_i + 1] = T.nnet.conv2d(pred_activations[l_i], self.weights[l_i]) + self.biases[l_i]
             else:
-                activation = T.nnet.relu(self.biases[l_i] + T.tensordot(self.weights[l_i], columnized, axes=1))
-                pred_activations[l_i + 1] = im2col.col2im(activation, layer_sizes[l_i + 1])
+                pred_activations[l_i + 1] = T.nnet.relu(T.nnet.conv2d(pred_activations[l_i], self.weights[l_i]) + self.biases[l_i])
         pred_output = pred_activations[-1]
         # Create Theano function for predicting
         self.predict = Tfunc([pred_images], pred_output)
@@ -156,18 +152,18 @@ class MLP:
 
         # the_updates = [(var, var - rate*d_var) for var, d_var in zip(self.weights + self.biases, derivatives)]
         # Function for actually executing training
-        self.update_step = Tfunc([images, y, rate], loss, updates=update_rules, mode='DebugMode')
+        self.update_step = Tfunc([images, y, rate], loss, updates=update_rules)
 
     def train(self, x, y, test_x, test_y, rate=0.002, batch_size=200, epochs=30):
         losses = []
         train_accuracies = []
         test_accuracies = []
         for epoch in range(epochs):
-            n_iters = int(x.shape[3] / batch_size)
+            n_iters = int(x.shape[0] / batch_size)
             for iter in range(n_iters):
-                selection = np.random.randint(0, x.shape[3], batch_size)
+                selection = np.random.randint(0, x.shape[0], batch_size)
                 # loss = self.update_weights(x[:,selection], y[:,selection], rate)
-                loss = self.update_step(x[:,:,:,selection], y[:,selection], rate)
+                loss = self.update_step(x[selection,:,:,:], y[selection,:], rate)
                 losses.append(loss)
             train_accuracies.append(calc_accuracy(self, x, y))
             test_accuracies.append(calc_accuracy(self, test_x, test_y))
@@ -260,17 +256,17 @@ def preprocess(data, params=None):
         mean = np.mean(data, axis=0)
         data -= mean
         stdev = np.std(data, axis=0)
-        # data /= stdev
+        data /= stdev
         return (mean, stdev)
     else:
         data -= params[0]
-        # data /= params[1]
+        data /= params[1]
         return params
 
 def calc_accuracy(mlp, data_x, data_y):
     output = mlp.predict(data_x)
-    predictions = np.argmax(output[0,0], axis=0)
-    accuracy = np.sum(np.argmax(data_y, axis=0) == predictions) / data_y.shape[1]
+    predictions = np.argmax(output[:,:,0,0], axis=1)
+    accuracy = np.sum(np.argmax(data_y, axis=1) == predictions) / data_y.shape[0]
     return accuracy
 
 def transform_labels(labels, n_classes=None):
@@ -279,7 +275,7 @@ def transform_labels(labels, n_classes=None):
     y = np.zeros((n_classes, labels.shape[0]))
     for c in range(n_classes):
         y[c, np.where(labels == c)[0]] = 1
-    return y
+    return np.transpose(y)
 
 def show_predictions(data_x, data_predictions, class_names={}, n_to_show=50):
     n_rows = 8
@@ -300,7 +296,7 @@ def show_predictions(data_x, data_predictions, class_names={}, n_to_show=50):
 
 def cifar_to_im(dataset):
     n_images = dataset.shape[0]
-    return np.transpose(dataset.T.reshape((32,32,3,n_images), order='F'), [1,0,2,3]).astype('float64')
+    return np.transpose(dataset.T.reshape((32,32,3,n_images), order='F'), [3,2,0,1]).astype('float32')
 
 if __name__ == '__main__':
     # with open('datasets/mnist.pkl3', 'rb') as data_f:
@@ -309,7 +305,7 @@ if __name__ == '__main__':
     # with gzip.open('datasets/mnist.pkl3.gz', 'wb') as data_f:
     #     pickle.dump((train_set, test_set, validation_set), data_f)
 
-    amt = 5000
+    amt = 20000
     train_data = train_set[0][0:amt]
     train_labels = train_set[1][0:amt]
 
@@ -324,10 +320,9 @@ if __name__ == '__main__':
     test_data = test_set[0]
     preprocess(test_data, transform)
     test_x = cifar_to_im(test_data)
-    # adam, RMSprop
     train_scratch = True
     n_hidden = 100
-    layer_sizes = [(32,32,3), (30,30,10), (1,1,10)]
+    layer_sizes = [(32,32,3), (30,30,20), (1,1,10)]
     dropout = 0.7
     batch = 50
     epochs = 5
