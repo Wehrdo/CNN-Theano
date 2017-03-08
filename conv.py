@@ -11,30 +11,26 @@ import sys
 import math
 import time
 import pickle
-import itertools
-import im2col
-
-sys.setrecursionlimit(2000)
 
 MARGIN = 1
 
 class MLP:
-    def __init__(self, layer_sizes, dropout_rate, trained_model=None):
-        n_layers = len(layer_sizes) - 1
+    def __init__(self, layers, dropout_rate, trained_model=None):
+        n_layers = len(layers)
         kernel_sizes = []
         if trained_model is None:
             self.weights = []
             self.biases = []
             # Initialize random values for weight and biase matrices
-            for i in range(1, n_layers + 1):
-                n_kernels = layer_sizes[i][2]
-                kernel_size = layer_sizes[i-1][0] - layer_sizes[i][0] + 1
-                assert(kernel_size == layer_sizes[i-1][1] - layer_sizes[i][1] + 1) # Check that x/y dims match
-                w_mat_size = (n_kernels, layer_sizes[i-1][2], kernel_size, kernel_size)
+            for i in range(1, n_layers):
+                n_kernels = layers[i].n_kernels
+                # kernel_size = layer_sizes[i-1][0] - layer_sizes[i][0] + 1
+                kernel_size = layers[i].kernel_size
+                w_mat_size = (n_kernels, layers[i-1].n_kernels, kernel_size, kernel_size)
                 kernel_sizes.append(kernel_size)
 
-                w = np.random.standard_normal(w_mat_size) * math.sqrt(2 / w_mat_size[1])
-                b = np.random.standard_normal((1,n_kernels,1,1)) * math.sqrt(2 / w_mat_size[1])
+                w = np.random.standard_normal(w_mat_size) * 0.001#math.sqrt(2 / w_mat_size[1])
+                b = np.random.standard_normal((1,n_kernels,1,1)) * 0.001#math.sqrt(2 / w_mat_size[1])
 
                 # w = np.random.standard_normal((layer_sizes[i], layer_sizes[i-1])) * math.sqrt(2 / layer_sizes[i-1])
                 # b = np.random.standard_normal((layer_sizes[i], 1)) * math.sqrt(2 / layer_sizes[i-1])
@@ -51,10 +47,10 @@ class MLP:
         self.biases = [shared(b, f"b{i}", broadcastable=(True,False,True,True)) for i, b in enumerate(self.biases)]
 
         # Variable for y value (correct values when training)
-        y = T.dmatrix('y')
+        y = T.matrix('y')
 
         # List of matrices for each layer's activations, plus one for input
-        activations = T.dtensor4s(n_layers + 1)
+        activations = T.tensor4s(n_layers)
 
         images = T.tensor4('images')
         activations[0] = images #im2col.im2col(images, kernel_sizes[0])
@@ -67,13 +63,15 @@ class MLP:
         #     srng = RandomStreams(np_rng.randint(1000000))
         #     rv = srng.uniform((layer_sizes[i][2], layer_sizes[i][0]*layer_sizes[i][0], y.shape[3]))
         #     dropout_masks.append(rv)
-        for l_i in range(n_layers):
+        for l_i in range(1, n_layers):
             # Define layer function: max(0, w*x + b)
-            if l_i == n_layers - 1: # Output layer
-                activations[l_i + 1] = T.nnet.conv2d(activations[l_i], self.weights[l_i]) + self.biases[l_i]
-                # activations[l_i + 1] = self.biases[l_i] + T.tensordot(self.weights[l_i], columnized, axes=1)
-            else:
-                activations[l_i + 1] = T.nnet.relu(T.nnet.conv2d(activations[l_i], self.weights[l_i]) + self.biases[l_i])
+            convolved = T.nnet.conv2d(activations[l_i-1], self.weights[l_i-1], border_mode=layers[l_i].mode) + self.biases[l_i-1]
+            if l_i != n_layers - 1:
+                convolved = T.nnet.relu(convolved)
+            if layers[l_i].pool is not None:
+                pool_size = layers[l_i].pool
+                convolved = T.signal.pool.pool_2d(convolved, (pool_size, pool_size), ignore_border=False)
+            activations[l_i] = convolved
                 # activation = T.nnet.relu(self.biases[l_i] + T.tensordot(self.weights[l_i], columnized, axes=1))
                 # activations[l_i + 1] = im2col.col2im(activation, layer_sizes[l_i + 1])
             # elif l_i == 0:
@@ -107,18 +105,24 @@ class MLP:
         loss = T.sum(individual_losses) / n_samples
 
         # List of matrices for each layer's activations, plus one for input
-        pred_activations = T.tensor4s(n_layers + 1)
-        pred_images = T.tensor4('pred_images')
-        pred_activations[0] = pred_images #im2col.im2col(pred_images, kernel_sizes[0])
-        for l_i in range(n_layers):
-            # Define layer function: max(0, w*x + b)
-            if l_i == n_layers - 1: # Output layer
-                pred_activations[l_i + 1] = T.nnet.conv2d(pred_activations[l_i], self.weights[l_i]) + self.biases[l_i]
-            else:
-                pred_activations[l_i + 1] = T.nnet.relu(T.nnet.conv2d(pred_activations[l_i], self.weights[l_i]) + self.biases[l_i])
-        pred_output = pred_activations[-1]
+        # pred_activations = T.tensor4s(n_layers)
+        # pred_images = T.tensor4('pred_images')
+        # pred_activations[0] = pred_images #im2col.im2col(pred_images, kernel_sizes[0])
+        # for l_i in range(1, n_layers):
+        #     # Define layer function: max(0, w*x + b)
+        #     if l_i == n_layers: # Output layer
+        #         pred_activations[l_i + 1] = T.nnet.conv2d(pred_activations[l_i], self.weights[l_i]) + self.biases[l_i]
+        #     else:
+        #         activation = T.nnet.relu(T.nnet.conv2d(pred_activations[l_i], self.weights[l_i]) + self.biases[l_i])
+        #         if layers[l_i].pool is not None:
+        #             pool_size = layers[l_i].pool
+        #             pred_activations[l_i + 1] = T.signal.pool.pool_2d(activation, (pool_size, pool_size), ignore_border=False)
+        #         else:
+        #             pred_activations[l_i + 1] = activation
+        # pred_output = pred_activations[-1]
         # Create Theano function for predicting
-        self.predict = Tfunc([pred_images], pred_output)
+        # self.predict = Tfunc([pred_images], pred_output)
+        self.predict = Tfunc([images], activations[-1])
 
         # List of expressions for derivatives: d_w1, d_w2, ... d_b1, d_b2,...
         derivatives = T.grad(loss, self.weights + self.biases)
@@ -126,13 +130,20 @@ class MLP:
         rate = T.dscalar('r')
 
         # How to update weights and biases when training
+        update_rules = self.adam_update(rate, derivatives, self.weights + self.biases)
+        # update_rules = [(var, var - rate*d_var) for var, d_var in zip(self.weights + self.biases, derivatives)]
+
+        # Function for actually executing training
+        self.update_step = Tfunc([images, y, rate], loss, updates=update_rules)
+
+    def adam_update(self, rate, derivatives, values):
         B1 = 0.9
         B2 = 0.999
         eps = 1e-8
         decayed_B1 = shared(B1, 'B1')
         decayed_B2 = shared(B2, 'B2')
         update_rules = []
-        for i, param in enumerate(itertools.chain(self.weights, self.biases)):
+        for i, param in enumerate(values):
             param_dims = param.get_value(borrow=True).shape
             moment1 = shared(np.zeros(param_dims), broadcastable=param.broadcastable)
             moment2 = shared(np.zeros(param_dims), broadcastable=param.broadcastable)
@@ -149,12 +160,10 @@ class MLP:
         update_rules.append((decayed_B1, B1 * decayed_B1))
         update_rules.append((decayed_B2, B2 * decayed_B2))
 
+        return update_rules
 
-        # the_updates = [(var, var - rate*d_var) for var, d_var in zip(self.weights + self.biases, derivatives)]
-        # Function for actually executing training
-        self.update_step = Tfunc([images, y, rate], loss, updates=update_rules)
 
-    def train(self, x, y, test_x, test_y, rate=0.002, batch_size=200, epochs=30):
+    def train(self, x, y, test_x, test_y, rate=0.001, batch_size=200, epochs=30):
         losses = []
         train_accuracies = []
         test_accuracies = []
@@ -168,99 +177,28 @@ class MLP:
             train_accuracies.append(calc_accuracy(self, x, y))
             test_accuracies.append(calc_accuracy(self, test_x, test_y))
             print(f"Epoch {epoch}, train: {train_accuracies[-1]}, test: {test_accuracies[-1]}")
+            rate *= 0.95
         return losses, train_accuracies, test_accuracies
 
-    def update_weights(self, x, y, rate):
-        N = x.shape[1]
-
-        forward_ps = []
-        forward_zs = []
-        forward_as = []
-
-        a = x
-        forward_as.append(x)
-        for w, b in zip(self.weights, self.biases):
-            p = np.dot(w, a)
-            z = p + b
-            a = self.activation_func(z)
-            forward_ps.append(p)
-            forward_zs.append(z)
-            forward_as.append(a)
-
-        a_o = forward_as.pop()
-        loss = self.compute_loss(y, a_o)
-        d_loss = self.loss_gradient(y, a_o)
-
-        d_bs = []
-        d_ws = []
-        d_a = d_loss
-        for p, z, a, w in zip(*map(reversed, [forward_ps, forward_zs, forward_as, self.weights])):
-            d_z = d_a * self.activation_gradient(z)
-            d_b = np.sum(d_z, axis=1) / N
-            d_p = d_z
-            d_w = np.dot(d_p, a.T) / N
-            d_a = np.dot(w.T, d_p)
-            d_bs.append(d_b)
-            d_ws.append(d_w)
+class Layer:
+    def __init__(self, n_kernels, kernel_size, pool=None, mode='valid', width=None, height=None):
+        self.n_kernels = n_kernels
+        self.kernel_size = kernel_size
+        self.pool = pool
+        self.mode = mode
 
 
-        # Make in order of layer 0, layer 1, ...
-        d_ws.reverse()
-        d_bs.reverse()
-        for w, d_w, b, d_b in zip(self.weights, d_ws, self.biases, d_bs):
-            w -= rate * d_w
-            b -= rate * d_b.reshape(-1,1)
-
-        return loss
-
-    def compute_loss(self, expected, actual):
-        # return 0.5 * np.sum(np.square(actual - expected))
-        correct_classes = np.nonzero(expected.T)[1]
-        correct_vals = actual[correct_classes,np.arange(actual.shape[1])]
-        margin_mat = np.maximum(0, actual - np.repeat(correct_vals.reshape(1,-1), repeats=expected.shape[0], axis=0) + 1)
-        individual_losses = np.sum(np.ma.array(margin_mat, mask=expected), axis=0)
-        loss = np.sum(individual_losses)
-        N = actual.shape[1]
-        return loss / N
-
-    def loss_gradient(self, expected, actual):
-        # return actual - expected
-        N = actual.shape[1]
-        correct_classes = np.nonzero(expected.T)[1]
-        correct_vals = actual[correct_classes,np.arange(N)]
-        margin_mat = np.maximum(0, actual - np.repeat(correct_vals.reshape(1,-1), repeats=expected.shape[0], axis=0) + 1)
-        grad_mat = (margin_mat > 0).astype(float)
-        grad_mat[correct_classes, np.arange(N)] = -np.ma.array(grad_mat, mask=expected).sum(axis=0)
-        gradients = grad_mat.sum(axis = 1) / N
-        return gradients.reshape(-1,1)
-        # return grad_mat.sum() / N
-
-    def activation_func(self, x):
-        # return np.tanh(x)
-        return np.maximum(x, 0)
-
-    def activation_gradient(self, x):
-        return self.relu_gradient(x)
-
-    def relu_gradient(self, x):
-        return (x > 0).astype(float)
-
-    def tanh_gradient(self, x):
-        e_2x = np.exp(2*x) # e^2x
-        numerator = 4 * e_2x
-        denominator = (e_2x + 1)**2
-        return numerator / denominator
 
 def preprocess(data, params=None):
     if params == None:
         mean = np.mean(data, axis=0)
         data -= mean
         stdev = np.std(data, axis=0)
-        data /= stdev
+        # data /= stdev
         return (mean, stdev)
     else:
         data -= params[0]
-        data /= params[1]
+        # data /= params[1]
         return params
 
 def calc_accuracy(mlp, data_x, data_y):
@@ -305,7 +243,7 @@ if __name__ == '__main__':
     # with gzip.open('datasets/mnist.pkl3.gz', 'wb') as data_f:
     #     pickle.dump((train_set, test_set, validation_set), data_f)
 
-    amt = 20000
+    amt = 50000
     train_data = train_set[0][0:amt]
     train_labels = train_set[1][0:amt]
 
@@ -321,15 +259,17 @@ if __name__ == '__main__':
     preprocess(test_data, transform)
     test_x = cifar_to_im(test_data)
     train_scratch = True
-    n_hidden = 100
-    layer_sizes = [(32,32,3), (30,30,20), (1,1,10)]
+    layers = [Layer(3, 0), Layer(32, 3, pool=2, mode='half'), Layer(32, 3, pool=2, mode='half'), Layer(10, 8)]
+    # layers = [Layer(3, 0), Layer(32, 3), Layer(10, 30)]
+    # layers = [Layer(3, 0), Layer(70, 32), Layer(10, 1)]
     dropout = 0.7
-    batch = 50
-    epochs = 5
+    batch = 100
+    epochs = 15
+    # alpha = 0.1
     alpha = 0.001
 
     if train_scratch:
-        mlp = MLP(layer_sizes, dropout)
+        mlp = MLP(layers, dropout)
         start_time = time.time()
         losses, train_accuracies, test_accuracies = mlp.train(train_x, train_y, test_x, test_y, alpha, batch, epochs)
         print("Took " + str(time.time() - start_time) + " seconds to train")
@@ -346,7 +286,7 @@ if __name__ == '__main__':
     else:
         with open('trained_conv_cifar.pkl', 'rb') as file:
             pre_trained, train_accuracies, test_accuracies, losses = saved_data = pickle.load(file)
-            mlp = MLP(layer_sizes, dropout, pre_trained)
+            mlp = MLP(layers, dropout, pre_trained)
 
         plt.subplot(2, 1, 1)
         plt.plot(losses)
