@@ -29,8 +29,8 @@ class MLP:
                 w_mat_size = (n_kernels, layers[i-1].n_kernels, kernel_size, kernel_size)
                 kernel_sizes.append(kernel_size)
 
-                w = np.random.standard_normal(w_mat_size) * 0.001#math.sqrt(2 / w_mat_size[1])
-                b = np.random.standard_normal((1,n_kernels,1,1)) * 0.001#math.sqrt(2 / w_mat_size[1])
+                w = np.random.standard_normal(w_mat_size).astype('float32') * 0.001#math.sqrt(2 / w_mat_size[1])
+                b = np.random.standard_normal((1,n_kernels,1,1)).astype('float32') * 0.001#math.sqrt(2 / w_mat_size[1])
 
                 # w = np.random.standard_normal((layer_sizes[i], layer_sizes[i-1])) * math.sqrt(2 / layer_sizes[i-1])
                 # b = np.random.standard_normal((layer_sizes[i], 1)) * math.sqrt(2 / layer_sizes[i-1])
@@ -102,7 +102,7 @@ class MLP:
         # activations[-1] is (C,1,N). Drop the middle dimension, then transpose
         reshaped_x = activations[-1].reshape((n_samples, n_classes))
         individual_losses = T.nnet.categorical_crossentropy(T.nnet.softmax(reshaped_x), y)
-        loss = T.sum(individual_losses) / n_samples
+        loss = T.sum(individual_losses) / T.cast(n_samples, 'float32')
 
         # List of matrices for each layer's activations, plus one for input
         # pred_activations = T.tensor4s(n_layers)
@@ -127,7 +127,7 @@ class MLP:
         # List of expressions for derivatives: d_w1, d_w2, ... d_b1, d_b2,...
         derivatives = T.grad(loss, self.weights + self.biases)
         # Learning rate
-        rate = T.dscalar('r')
+        rate = T.scalar('r')
 
         # How to update weights and biases when training
         update_rules = self.adam_update(rate, derivatives, self.weights + self.biases)
@@ -137,22 +137,22 @@ class MLP:
         self.update_step = Tfunc([images, y, rate], loss, updates=update_rules)
 
     def adam_update(self, rate, derivatives, values):
-        B1 = 0.9
-        B2 = 0.999
-        eps = 1e-8
+        B1 = np.float32(0.9)
+        B2 = np.float32(0.999)
+        eps = np.float32(1e-8)
         decayed_B1 = shared(B1, 'B1')
         decayed_B2 = shared(B2, 'B2')
         update_rules = []
         for i, param in enumerate(values):
             param_dims = param.get_value(borrow=True).shape
-            moment1 = shared(np.zeros(param_dims), broadcastable=param.broadcastable)
-            moment2 = shared(np.zeros(param_dims), broadcastable=param.broadcastable)
+            moment1 = shared(np.zeros(param_dims).astype('float32'), broadcastable=param.broadcastable)
+            moment2 = shared(np.zeros(param_dims).astype('float32'), broadcastable=param.broadcastable)
             # computation
             gradient = derivatives[i]
-            new_moment1 = (B1 * moment1) + ((1 - B1) * gradient)
-            new_moment2 = (B2 * moment2) + ((1 - B2) * gradient * gradient)
-            moment1_est = new_moment1 / (1 - decayed_B1)
-            moment2_est = new_moment2 / (1 - decayed_B2)
+            new_moment1 = (B1 * moment1) + ((np.float32(1) - B1) * gradient)
+            new_moment2 = (B2 * moment2) + ((np.float32(1) - B2) * gradient * gradient)
+            moment1_est = new_moment1 / (np.float32(1) - decayed_B1)
+            moment2_est = new_moment2 / (np.float32(1) - decayed_B2)
             param_update = param - rate*(moment1_est / (T.sqrt(moment2_est) + eps))
             update_rules.append((param, param_update))
             update_rules.append((moment1, new_moment1))
@@ -213,7 +213,7 @@ def transform_labels(labels, n_classes=None):
     y = np.zeros((n_classes, labels.shape[0]))
     for c in range(n_classes):
         y[c, np.where(labels == c)[0]] = 1
-    return np.transpose(y)
+    return np.transpose(y).astype('float32')
 
 def show_predictions(data_x, data_predictions, class_names={}, n_to_show=50):
     n_rows = 8
@@ -238,7 +238,7 @@ def cifar_to_im(dataset):
 
 if __name__ == '__main__':
     # with open('datasets/mnist.pkl3', 'rb') as data_f:
-    with open('datasets/cifar-10-python/combined_data.pkl3', 'rb') as data_f:
+    with open('/hdd1/dawehr/datasets/combined_data.pkl3', 'rb') as data_f:
         train_set, test_set, validation_set = pickle.load(data_f)
     # with gzip.open('datasets/mnist.pkl3.gz', 'wb') as data_f:
     #     pickle.dump((train_set, test_set, validation_set), data_f)
@@ -259,12 +259,12 @@ if __name__ == '__main__':
     preprocess(test_data, transform)
     test_x = cifar_to_im(test_data)
     train_scratch = True
-    layers = [Layer(3, 0), Layer(32, 3, pool=2, mode='half'), Layer(32, 3, pool=2, mode='half'), Layer(10, 8)]
+    layers = [Layer(3, 0), Layer(40, 5, pool=2, mode='half'), Layer(32, 3, pool=2, mode='half'), Layer(64, 8), Layer(10, 1)]
     # layers = [Layer(3, 0), Layer(32, 3), Layer(10, 30)]
     # layers = [Layer(3, 0), Layer(70, 32), Layer(10, 1)]
     dropout = 0.7
     batch = 100
-    epochs = 15
+    epochs = 25
     # alpha = 0.1
     alpha = 0.001
 
