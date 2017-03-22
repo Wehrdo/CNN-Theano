@@ -1,4 +1,4 @@
-from typing import Tuple, List
+from typing import Tuple
 
 import matplotlib
 import numpy as np
@@ -11,11 +11,11 @@ import theano
 import matplotlib.pyplot as plt
 import matplotlib.gridspec
 import matplotlib.colors
-import sys
-import math
 import time
 import pickle
 import json
+
+import cifar_utils
 
 MARGIN = 1
 
@@ -195,7 +195,7 @@ class MLP:
                 losses.append(loss)
             train_accuracies.append(calc_accuracy(self, x, y, batch_size))
             test_accuracies.append(calc_accuracy(self, test_x, test_y, batch_size))
-            print(f"Epoch {epoch}, train: {train_accuracies[-1]}, test: {test_accuracies[-1]}")
+            # print(f"Epoch {epoch}, train: {train_accuracies[-1]}, test: {test_accuracies[-1]}")
             rate *= 0.95
         return losses, train_accuracies, test_accuracies
 
@@ -206,19 +206,6 @@ class Layer:
         self.pool = pool
         self.mode = mode
 
-
-
-def preprocess(data, params=None):
-    if params == None:
-        mean = np.mean(data, axis=0)
-        data -= mean
-        stdev = np.std(data, axis=0)
-        data /= stdev
-        return (mean, stdev)
-    else:
-        data -= params[0]
-        data /= params[1]
-        return params
 
 def calc_accuracy(mlp, data_x, data_y, pred_size = 100):
     output = np.empty((data_y.shape[0], data_y.shape[1], 1, 1))
@@ -231,13 +218,6 @@ def calc_accuracy(mlp, data_x, data_y, pred_size = 100):
     accuracy = np.sum(np.argmax(data_y, axis=1) == predictions) / data_y.shape[0]
     return accuracy
 
-def transform_labels(labels, n_classes=None):
-    if n_classes is None:
-        n_classes = len(np.unique(labels))
-    y = np.zeros((n_classes, labels.shape[0]))
-    for c in range(n_classes):
-        y[c, np.where(labels == c)[0]] = 1
-    return np.transpose(y).astype('float32')
 
 def show_predictions(data_x, data_predictions, class_names={}, n_to_show=50):
     n_rows = 8
@@ -256,49 +236,32 @@ def show_predictions(data_x, data_predictions, class_names={}, n_to_show=50):
             ax.axis('off')
     plt.show()
 
-def cifar_to_im(dataset):
-    n_images = dataset.shape[0]
-    return np.transpose(dataset.T.reshape((32,32,3,n_images), order='F'), [3,2,0,1]).astype('float32')
 
 if __name__ == '__main__':
     with open('comp_config.json') as f:
         comp_config = json.load(f)
-    # with open('datasets/mnist.pkl3', 'rb') as data_f:
-    with open(comp_config['dataset'], 'rb') as data_f:
-        train_set, test_set, validation_set = pickle.load(data_f)
-    # with gzip.open('datasets/mnist.pkl3.gz', 'wb') as data_f:
-    #     pickle.dump((train_set, test_set, validation_set), data_f)
 
-    amt = 50000
-    train_data = train_set[0][0:amt]
-    train_labels = train_set[1][0:amt]
+    train_x, train_y, test_x, test_y = cifar_utils.load_data(comp_config['dataset'])
 
-    transform = preprocess(train_data)
-
-    train_x = cifar_to_im(train_data)
-
-    # n_classes = len(np.unique(train_labels))
-    train_y = transform_labels(train_labels, 10)
-
-    test_y = transform_labels(test_set[1], 10)
-    test_data = test_set[0]
-    preprocess(test_data, transform)
-    test_x = cifar_to_im(test_data)
     train_scratch = True
-    layers = [Layer((3,32,32), 0), Layer((64,16,16), 5, pool=2, mode='half'), Layer((32,8,8), 3, pool=2, mode='half'), Layer((64,1,1), 8), Layer((10,1,1), 1)]
+    layers = [Layer((3,32,32), 0), Layer((64,16,16), 5, pool=2, mode='half'), Layer((64,8,8), 3, pool=2, mode='half'), Layer((64,1,1), 8), Layer((10,1,1), 1)]
     # layers = [Layer(3, 0), Layer(32, 3), Layer(10, 30)]
     # layers = [Layer(3, 0), Layer(70, 32), Layer(10, 1)]
     dropout = 0.7
     batch = 100
     epochs = 25
     # alpha = 0.1
-    alpha = 0.001
+    alpha = 0.005
 
     if train_scratch:
         mlp = MLP(layers, dropout)
         start_time = time.time()
         losses, train_accuracies, test_accuracies = mlp.train(train_x, train_y, test_x, test_y, alpha, batch, epochs)
         print("Took " + str(time.time() - start_time) + " seconds to train")
+        with open('trained_conv_cifar.pkl', 'wb') as file:
+            mlp_data = ([w.get_value() for w in mlp.weights], [b.get_value() for b in mlp.biases])
+            pickle.dump((mlp_data, train_accuracies, test_accuracies, losses), file)
+
         plt.subplot(2, 1, 1)
         plt.plot(losses)
         plt.subplot(2, 1, 2)
@@ -306,9 +269,6 @@ if __name__ == '__main__':
         plt.plot(test_accuracies, ls="none", marker='o')
         plt.show()
 
-        with open('trained_conv_cifar.pkl', 'wb') as file:
-            mlp_data = ([w.get_value() for w in mlp.weights], [b.get_value() for b in mlp.biases])
-            pickle.dump((mlp_data, train_accuracies, test_accuracies, losses), file)
     else:
         with open('trained_conv_cifar.pkl', 'rb') as file:
             pre_trained, train_accuracies, test_accuracies, losses = saved_data = pickle.load(file)
