@@ -195,7 +195,7 @@ class MLP:
                 losses.append(loss)
             train_accuracies.append(calc_accuracy(self, x, y, batch_size))
             test_accuracies.append(calc_accuracy(self, test_x, test_y, batch_size))
-            # print(f"Epoch {epoch}, train: {train_accuracies[-1]}, test: {test_accuracies[-1]}")
+            print(f"Epoch {epoch}, train: {train_accuracies[-1]}, test: {test_accuracies[-1]}")
             rate *= 0.95
         return losses, train_accuracies, test_accuracies
 
@@ -244,14 +244,14 @@ if __name__ == '__main__':
     train_x, train_y, test_x, test_y = cifar_utils.load_data(comp_config['dataset'])
 
     train_scratch = True
-    layers = [Layer((3,32,32), 0), Layer((64,16,16), 5, pool=2, mode='half'), Layer((64,8,8), 3, pool=2, mode='half'), Layer((64,1,1), 8), Layer((10,1,1), 1)]
+    layers = [Layer((3,32,32), 0), Layer((128,16,16), 5, pool=2, mode='half'), Layer((128,8,8), 5, pool=2, mode='half'), Layer((128,1,1), 8), Layer((100,1,1), 1)]
     # layers = [Layer(3, 0), Layer(32, 3), Layer(10, 30)]
     # layers = [Layer(3, 0), Layer(70, 32), Layer(10, 1)]
     dropout = 0.7
     batch = 100
     epochs = 25
     # alpha = 0.1
-    alpha = 0.005
+    alpha = 0.001
 
     if train_scratch:
         mlp = MLP(layers, dropout)

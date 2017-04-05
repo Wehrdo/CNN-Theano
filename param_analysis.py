@@ -16,5 +16,5 @@ if __name__ == '__main__':
         results[param_set] = get_accuracy(file_name)
     rev_reults = {v: k for k, v in results.items()}
     top_scores = sorted(rev_reults.keys(), reverse=True)
-    for score in top_scores[:10]:
+    for score in top_scores[:25]:
         print(score, rev_reults[score])
