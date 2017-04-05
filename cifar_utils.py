@@ -1,3 +1,4 @@
+import math
 import pickle
 import numpy as np
 
@@ -24,7 +25,8 @@ def load_data(path, amt=-1):
 
 def cifar_to_im(dataset):
     n_images = dataset.shape[0]
-    return np.transpose(dataset.T.reshape((32,32,3,n_images), order='F'), [3,2,0,1]).astype('float32')
+    img_width = int(math.sqrt(dataset.shape[1] / 3))
+    return np.transpose(dataset.T.reshape((img_width,img_width,3,n_images), order='F'), [3,2,0,1]).astype('float32')
 
 def transform_labels(labels, n_classes=None):
     if n_classes is None:
